@@ -3,7 +3,7 @@ import Matter from 'matter-js';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Settings, Leaf, Droplets, Wind, Sun, Bike, ShoppingBasket, Recycle, 
-  LogOut, Sprout, TreeDeciduous, Package, ShoppingBag, Flower2, Lightbulb 
+  LogOut, Sprout, TreeDeciduous, Package, ShoppingBag, Flower2, Lightbulb, CloudRain 
 } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -88,13 +88,36 @@ export default function EcoPachinko() {
   const [ballsInBaskets, setBallsInBaskets] = useState<Record<number, number>>({});
   const [pins, setPins] = useState<{x: number, y: number, id: string}[]>([]);
   const [isJackpotSeedActive, setIsJackpotSeedActive] = useState(false);
-  const [lifetimeTries, setLifetimeTries] = useState(0);
+  const [showDoubleOrNothing, setShowDoubleOrNothing] = useState(false);
+  const [currentJackpotWin, setCurrentJackpotWin] = useState(0);
+  const [isGambling, setIsGambling] = useState(false);
+  const [gambleResult, setGambleResult] = useState<'win' | 'loss' | null>(null);
+  
+  const [lifetimeTries, setLifetimeTries] = useState(() => {
+    const saved = localStorage.getItem('eco-pachinko-lifetime-tries');
+    return saved ? parseInt(saved) : 0;
+  });
+
+  const [triesSinceLastJackpotPrize, setTriesSinceLastJackpotPrize] = useState(() => {
+    const saved = localStorage.getItem('eco-pachinko-pity-counter');
+    return saved ? parseInt(saved) : 0;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('eco-pachinko-lifetime-tries', lifetimeTries.toString());
+  }, [lifetimeTries]);
+
+  useEffect(() => {
+    localStorage.setItem('eco-pachinko-pity-counter', triesSinceLastJackpotPrize.toString());
+  }, [triesSinceLastJackpotPrize]);
 
   const resetGame = () => {
     setTriesLeft(inputTries);
     setScore(0);
     setBallsInBaskets({});
     setShowCongrats(false);
+    setShowDoubleOrNothing(false);
+    setCurrentJackpotWin(0);
     if (engineRef.current) {
       const world = engineRef.current.world;
       const balls = Matter.Composite.allBodies(world).filter(b => b.label === 'ball' || b.label === 'ball-jackpot');
@@ -107,6 +130,8 @@ export default function EcoPachinko() {
     setGameStarted(true);
     setScore(0);
     setBallsInBaskets({});
+    setShowDoubleOrNothing(false);
+    setCurrentJackpotWin(0);
   };
 
   // Dropper Swinging Logic
@@ -206,16 +231,24 @@ export default function EcoPachinko() {
 
     // Slots (Bamboo Cups)
     const slots: Matter.Body[] = [];
-    const slotWidth = BOARD_WIDTH / SLOT_COUNT;
-    for (let i = 0; i < SLOT_COUNT; i++) {
-      const x = i * slotWidth + slotWidth / 2;
-      const slot = Matter.Bodies.rectangle(x, BOARD_HEIGHT - 30, slotWidth - 10, 60, {
+    const totalSlots = SLOT_COUNT;
+    const centerIndex = Math.floor(totalSlots / 2);
+    const standardWidth = BOARD_WIDTH / totalSlots;
+    const jackpotWidth = standardWidth * 0.6; // 40% narrower center slot
+    const otherWidth = (BOARD_WIDTH - jackpotWidth) / (totalSlots - 1);
+
+    let currentX = 0;
+    for (let i = 0; i < totalSlots; i++) {
+      const width = i === centerIndex ? jackpotWidth : otherWidth;
+      const x = currentX + width / 2;
+      const slot = Matter.Bodies.rectangle(x, BOARD_HEIGHT - 30, width - 10, 60, {
         isStatic: true,
         isSensor: true,
         label: `slot-${i}`,
         render: { visible: false }
       });
       slots.push(slot);
+      currentX += width;
     }
 
     Matter.World.add(world, [leftWall, rightWall, bottomWall, ...pinBodies, ...slots]);
@@ -245,14 +278,23 @@ export default function EcoPachinko() {
             
             // Add score based on slot value
             let val = slotData.value.endsWith('k') ? parseInt(slotData.value) * 1000 : parseInt(slotData.value);
-            let isJackpotWin = ball.label === 'ball-jackpot';
+            
+            // Trigger Double or Nothing whenever a ball lands in the center slot (index 5)
+            // or if it's a special jackpot pity ball landing anywhere.
+            const isCenterSlot = slotIndex === 5;
+            const isJackpotBall = ball.label === 'ball-jackpot' || ball.label === 'ball-jackpot-pity';
+            const isJackpotWin = ball.label === 'ball-jackpot-pity' || (isJackpotBall && isCenterSlot) || (isCenterSlot && val >= 10000);
 
             if (isJackpotWin) {
               val = 10000;
-              setShowCongrats(true);
+              setTriesSinceLastJackpotPrize(0);
+              setCurrentJackpotWin(val);
+              setGambleResult(null);
+              setShowDoubleOrNothing(true);
+            } else {
+              setScore(prev => prev + val);
             }
             
-            setScore(prev => prev + val);
             setBallsInBaskets(prev => ({
               ...prev,
               [slotIndex]: (prev[slotIndex] || 0) + 1
@@ -351,20 +393,62 @@ export default function EcoPachinko() {
     return () => clearInterval(interval);
   }, []);
 
+  const handleGamble = () => {
+    setIsGambling(true);
+    setGambleResult(null);
+    
+    // Simulate a high-stakes gamble with a 10% chance (increased from 5% for better playability)
+    setTimeout(() => {
+      const win = Math.random() < 0.10; 
+      setIsGambling(false);
+      
+      if (win) {
+        setGambleResult('win');
+        setCurrentJackpotWin(prev => prev * 2);
+        createParticles(BOARD_WIDTH / 2, BOARD_HEIGHT / 2, '#fbbf24', 'sparkle');
+        createParticles(BOARD_WIDTH / 2, BOARD_HEIGHT / 2, '#f59e0b', 'leaf');
+      } else {
+        setGambleResult('loss');
+        setCurrentJackpotWin(0);
+      }
+    }, 2000);
+  };
+
+  const handleCollect = () => {
+    if (currentJackpotWin > 0) {
+      setScore(prev => prev + currentJackpotWin);
+      setShowCongrats(true);
+    }
+    setShowDoubleOrNothing(false);
+  };
+
   const dropBall = useCallback(() => {
     if (!engineRef.current || triesLeft <= 0 || !gameStarted) return;
     
     const nextLifetimeTries = lifetimeTries + 1;
-    const isJackpot = nextLifetimeTries % 200 === 0;
+    const nextPity = triesSinceLastJackpotPrize + 1;
+    
+    // Hidden Pity System: 1 jackpot every 150 balls (increased from 90)
+    const isPityJackpot = nextPity >= 150;
+    const isRandomJackpot = Math.random() < 0.02; // 2% chance (lowered from 4%)
+    const isJackpot = isPityJackpot || isRandomJackpot;
+    
     setLifetimeTries(nextLifetimeTries);
+    if (isJackpot) {
+      setTriesSinceLastJackpotPrize(0);
+    } else {
+      setTriesSinceLastJackpotPrize(nextPity);
+    }
+    
+    const ballLabel = isPityJackpot ? 'ball-jackpot-pity' : (isRandomJackpot ? 'ball-jackpot' : 'ball');
     
     const ball = Matter.Bodies.circle(dropperX, 40, BALL_RADIUS, {
-      restitution: 1.05, // Even bouncier ball
+      restitution: 1.05,
       friction: 0.01,
-      frictionAir: 0.015, // Reduced air friction for faster movement
-      label: isJackpot ? 'ball-jackpot' : 'ball',
+      frictionAir: 0.015,
+      label: ballLabel,
       render: {
-        fillStyle: isJackpot ? '#fbbf24' : '#4ade80', // Golden for jackpot, green for normal
+        fillStyle: isJackpot ? '#fbbf24' : '#4ade80',
         strokeStyle: isJackpot ? '#d97706' : '#16a34a',
         lineWidth: isJackpot ? 4 : 2,
       }
@@ -377,7 +461,7 @@ export default function EcoPachinko() {
     
     Matter.World.add(engineRef.current.world, ball);
     setTriesLeft(prev => prev - 1);
-  }, [dropperX, triesLeft, gameStarted, lifetimeTries]);
+  }, [dropperX, triesLeft, gameStarted, lifetimeTries, triesSinceLastJackpotPrize]);
 
   return (
     <div className="fixed inset-0 bg-[#a5f3fc] flex items-center justify-center overflow-hidden font-sans select-none">
@@ -562,41 +646,50 @@ export default function EcoPachinko() {
 
               {/* Slots Visuals (Baskets) */}
               <div className="absolute bottom-0 left-0 right-0 h-32 flex z-30 px-3 pb-3">
-                {SLOTS.map((slot, i) => (
-                  <div key={i} className="flex-1 flex flex-col items-center justify-end px-1">
-                    <div className="relative w-full h-full bg-amber-100 rounded-t-3xl border-x-4 border-t-4 border-amber-300 flex flex-col items-center justify-between py-3 shadow-[0_-5px_15px_rgba(0,0,0,0.2)] overflow-hidden">
-                       {/* Basket Weave Pattern */}
-                       <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/woven.png")' }} />
-                       
-                       <RewardIcon type={slot.reward} className="w-8 h-8 drop-shadow-sm z-10" />
-                       
-                       {/* Stored Balls Visual */}
-                       <div className="absolute bottom-10 left-0 right-0 flex flex-wrap justify-center gap-1 px-2">
-                          {Array.from({ length: Math.min(ballsInBaskets[i] || 0, 12) }).map((_, idx) => (
-                            <motion.div 
-                              key={idx}
-                              initial={{ scale: 0, y: -20 }}
-                              animate={{ scale: 1, y: 0 }}
-                              className="w-3 h-3 bg-emerald-400 rounded-full border border-emerald-600 shadow-sm"
-                            />
-                          ))}
-                          {(ballsInBaskets[i] || 0) > 12 && (
-                            <span className="text-[8px] font-bold text-amber-800">+{ballsInBaskets[i] - 12}</span>
-                          )}
-                       </div>
+                {SLOTS.map((slot, i) => {
+                  const totalSlots = SLOT_COUNT;
+                  const centerIndex = Math.floor(totalSlots / 2);
+                  const standardWidth = BOARD_WIDTH / totalSlots;
+                  const jackpotWidth = standardWidth * 0.6;
+                  const otherWidth = (BOARD_WIDTH - jackpotWidth) / (totalSlots - 1);
+                  const widthPercent = ((i === centerIndex ? jackpotWidth : otherWidth) / BOARD_WIDTH) * 100;
 
-                       <div className={cn(
-                         "px-3 py-1 rounded-lg border-2 shadow-inner z-10 transition-colors",
-                         slot.value === '10k' ? "bg-yellow-100 border-yellow-400" : "bg-white/90 border-stone-300"
-                       )}>
-                          <span className={cn(
-                            "text-[12px] font-black tracking-tighter",
-                            slot.value === '10k' ? "text-yellow-700" : "text-stone-700"
-                          )}>{slot.label}</span>
-                       </div>
+                  return (
+                    <div key={i} style={{ width: `${widthPercent}%` }} className="flex flex-col items-center justify-end px-1">
+                      <div className="relative w-full h-full bg-amber-100 rounded-t-3xl border-x-4 border-t-4 border-amber-300 flex flex-col items-center justify-between py-3 shadow-[0_-5px_15px_rgba(0,0,0,0.2)] overflow-hidden">
+                         {/* Basket Weave Pattern */}
+                         <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/woven.png")' }} />
+                         
+                         <RewardIcon type={slot.reward} className="w-8 h-8 drop-shadow-sm z-10" />
+                         
+                         {/* Stored Balls Visual */}
+                         <div className="absolute bottom-10 left-0 right-0 flex flex-wrap justify-center gap-1 px-2">
+                            {Array.from({ length: Math.min(ballsInBaskets[i] || 0, 12) }).map((_, idx) => (
+                              <motion.div 
+                                key={idx}
+                                initial={{ scale: 0, y: -20 }}
+                                animate={{ scale: 1, y: 0 }}
+                                className="w-3 h-3 bg-emerald-400 rounded-full border border-emerald-600 shadow-sm"
+                              />
+                            ))}
+                            {(ballsInBaskets[i] || 0) > 12 && (
+                              <span className="text-[8px] font-bold text-amber-800">+{ballsInBaskets[i] - 12}</span>
+                            )}
+                         </div>
+  
+                         <div className={cn(
+                           "px-3 py-1 rounded-lg border-2 shadow-inner z-10 transition-colors",
+                           slot.value === '10k' ? "bg-yellow-100 border-yellow-400" : "bg-white/90 border-stone-300"
+                         )}>
+                            <span className={cn(
+                              "text-[12px] font-black tracking-tighter",
+                              slot.value === '10k' ? "text-yellow-700" : "text-stone-700"
+                            )}>{slot.label}</span>
+                         </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -696,6 +789,130 @@ export default function EcoPachinko() {
         )}
       </AnimatePresence>
 
+      {/* Double or Nothing Overlay */}
+      <AnimatePresence>
+        {showDoubleOrNothing && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-xl"
+          >
+            <motion.div 
+              initial={{ scale: 0.8, y: 50 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white p-10 rounded-[40px] border-8 border-yellow-400 shadow-[0_20px_50px_rgba(251,191,36,0.3)] flex flex-col items-center max-w-md w-full text-center relative overflow-hidden"
+            >
+              {/* Background Glow for Win/Loss */}
+              <AnimatePresence>
+                {gambleResult === 'win' && (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 0.2 }}
+                    className="absolute inset-0 bg-emerald-400 pointer-events-none"
+                  />
+                )}
+                {gambleResult === 'loss' && (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 0.2 }}
+                    className="absolute inset-0 bg-red-400 pointer-events-none"
+                  />
+                )}
+              </AnimatePresence>
+
+              <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mb-6 relative z-10">
+                {gambleResult === 'loss' ? (
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    className="text-red-500"
+                  >
+                    <CloudRain className="w-14 h-14" />
+                  </motion.div>
+                ) : (
+                  <Sun className={cn(
+                    "w-14 h-14 text-yellow-500", 
+                    isGambling && "animate-spin",
+                    gambleResult === 'win' && "animate-bounce"
+                  )} />
+                )}
+              </div>
+              
+              <h2 className="text-3xl font-black text-stone-800 mb-2 uppercase relative z-10">
+                {gambleResult === 'win' ? "JACKPOT DOUBLED!" : 
+                 gambleResult === 'loss' ? "OH NO!" : 
+                 "Double or Nothing?"}
+              </h2>
+              
+              <p className="text-stone-500 mb-8 font-medium relative z-10">
+                {gambleResult === 'win' ? (
+                  <>You now have <span className="text-emerald-600 font-black text-2xl block mt-1">{currentJackpotWin.toLocaleString()} POINTS!</span></>
+                ) : gambleResult === 'loss' ? (
+                  <>You lost everything this round. <span className="text-red-500 font-black block mt-1">0 POINTS</span></>
+                ) : (
+                  <>
+                    You won <span className="text-emerald-600 font-black">{currentJackpotWin.toLocaleString()}</span> points!<br/>
+                    Risk it all for a <span className="text-yellow-600 font-black">10% chance</span> to double?
+                  </>
+                )}
+              </p>
+
+              <div className="flex flex-col gap-4 w-full relative z-10">
+                {gambleResult === null && (
+                  <>
+                    <button 
+                      onClick={handleGamble}
+                      disabled={isGambling}
+                      className={cn(
+                        "w-full py-5 bg-yellow-400 text-yellow-900 font-black text-2xl rounded-2xl border-4 border-yellow-500 shadow-[0_8px_0_#d97706] hover:translate-y-1 active:shadow-none transition-all",
+                        isGambling && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      {isGambling ? "SPINNING..." : "DOUBLE IT!"}
+                    </button>
+                    <button 
+                      onClick={handleCollect}
+                      disabled={isGambling}
+                      className="w-full py-4 bg-stone-100 text-stone-600 font-black text-xl rounded-2xl border-4 border-stone-200 hover:bg-stone-200 transition-all"
+                    >
+                      COLLECT WIN
+                    </button>
+                  </>
+                )}
+
+                {gambleResult === 'win' && (
+                  <>
+                    <button 
+                      onClick={handleGamble}
+                      disabled={isGambling}
+                      className="w-full py-5 bg-yellow-400 text-yellow-900 font-black text-2xl rounded-2xl border-4 border-yellow-500 shadow-[0_8px_0_#d97706] hover:translate-y-1 active:shadow-none transition-all"
+                    >
+                      DOUBLE AGAIN?
+                    </button>
+                    <button 
+                      onClick={handleCollect}
+                      className="w-full py-4 bg-emerald-500 text-white font-black text-xl rounded-2xl border-4 border-emerald-600 shadow-[0_8px_0_#059669] hover:translate-y-1 active:shadow-none transition-all"
+                    >
+                      COLLECT {currentJackpotWin.toLocaleString()}
+                    </button>
+                  </>
+                )}
+
+                {gambleResult === 'loss' && (
+                  <button 
+                    onClick={() => setShowDoubleOrNothing(false)}
+                    className="w-full py-5 bg-stone-800 text-white font-black text-xl rounded-2xl border-4 border-stone-900 shadow-[0_8px_0_#000] hover:translate-y-1 active:shadow-none transition-all"
+                  >
+                    TRY AGAIN
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Congratulations Overlay */}
       <AnimatePresence>
         {showCongrats && (
@@ -714,7 +931,7 @@ export default function EcoPachinko() {
               </div>
               <h2 className="text-5xl font-black text-emerald-800 mb-4 leading-tight">CONGRATULATIONS!</h2>
               <p className="text-xl font-bold text-stone-600 mb-8">
-                You hit the legendary 10,000 slot! Your contribution to the ecosystem is massive.
+                You collected <span className="text-emerald-600 font-black">{currentJackpotWin.toLocaleString()}</span> points! Your contribution to the ecosystem is massive.
               </p>
               <button 
                 onClick={() => setShowCongrats(false)}
